@@ -1,0 +1,64 @@
+name: Build grouped feed
+
+on:
+  schedule:
+    # 19:30 UTC = 21:30 (літо) / 22:30 (зима) за Києвом - ДО щоденного завантаження фіду в Yespo о 23:00
+    - cron: "30 19 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests
+        run: python test_build_feed.py
+      - name: Build feed
+        env:
+          SOURCE_FEED_URL: ${{ secrets.SOURCE_FEED_URL }}
+          PREV_FEED_URL: ${{ vars.PUBLISHED_FEED_URL }}
+        run: python build_feed.py --out dist/uatac_feed.xml --report dist/report.json
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  notify-failure:
+    # Якщо збірка або публікація впали - старий фід на Pages лишається як був, а Telegram повідомляє
+    needs: [build, deploy]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Telegram
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            curl -s "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TG_CHAT_ID}" \
+              --data-urlencode "text=⚠️ UATAC: виправлений фід не оновився. Yespo продовжує брати попередню версію. ${RUN_URL}" >/dev/null
+          fi
