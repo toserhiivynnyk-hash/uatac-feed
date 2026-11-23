@@ -28,6 +28,8 @@ FEED = HEAD + "".join([
     item("636011", "Трекінгові шкарпетки UATAC Олива 40-42"),
     item("341415", "Тактична демісезонна куртка UATAC Gen 5.6 Multicam Ripstop | XXL"),
     item("777771", "Вже згрупований товар L", extra="\n<g:item_group_id>MY</g:item_group_id>"),
+    item("888881", "Футболка UATAC CoolAir M", extra="\n<g:product_type>Одяг &gt; Футболки літні</g:product_type>"),
+    item("999991", "Куртка з сезоном M", extra="\n<g:custom_label_0>Зима</g:custom_label_0>"),
 ]) + TAIL
 
 
@@ -77,9 +79,27 @@ class T(unittest.TestCase):
         self.assertEqual(self.grp("777771"), "MY")
         self.assertEqual(self.out.count("<g:item_group_id>MY</g:item_group_id>"), 1)
 
+    def season(self, i):
+        e = self.items[i].find("g:custom_label_0", self.ns)
+        return e.text if e is not None else None
+
+    def test_season_from_title(self):
+        self.assertEqual(self.season("431010"), "Зима")          # «шапка зимова»
+        self.assertEqual(self.season("341415"), "Демісезон")     # «демісезонна куртка»
+
+    def test_season_from_product_type(self):
+        self.assertEqual(self.season("888881"), "Літо")          # категорія «Футболки літні»
+
+    def test_season_absent_when_unknown(self):
+        self.assertIsNone(self.season("LPB3XS"))                  # Legion - сезон ніде не вказано
+        self.assertIsNone(self.season("41562010"))                # кепка
+
+    def test_existing_season_not_duplicated(self):
+        self.assertEqual(len(self.items["999991"].findall("g:custom_label_0", self.ns)), 1)
+
     def test_original_untouched(self):
         self.assertIn("<![CDATA[<p>Опис &amp; склад</p>]]>", self.out)
-        self.assertEqual(self.stats["items"], 15)
+        self.assertEqual(self.stats["items"], 17)
 
     def test_validate_catches_damage(self):
         with self.assertRaises(Exception):

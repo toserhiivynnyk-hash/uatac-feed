@@ -28,8 +28,29 @@ import xml.etree.ElementTree as ET
 ITEM_RE = re.compile(r"<item>.*?</item>", re.S)
 ID_RE = re.compile(r"<g:id>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</g:id>", re.S)
 TITLE_RE = re.compile(r"<g:title>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</g:title>", re.S)
+PRODUCT_TYPE_RE = re.compile(r"<g:product_type>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</g:product_type>", re.S)
 HAS_GROUP_RE = re.compile(r"<g:item_group_id>")
 HAS_SIZE_RE = re.compile(r"<g:size>")
+HAS_LABEL0_RE = re.compile(r"<g:custom_label_0>")
+
+# Сезон для Yespo (custom_label_0): беремо ЛИШЕ з назви або категорії товару,
+# де сезон вказано явно. Нічого не вгадуємо - без збігу тег не ставиться.
+SEASON_PATTERNS = [
+    (re.compile(r"всесезон", re.I), "Всесезон"),
+    (re.compile(r"демісезон|демисезон", re.I), "Демісезон"),
+    (re.compile(r"зимов|зимн", re.I), "Зима"),
+    (re.compile(r"літн|(^|[\s>«(\-])літо", re.I), "Літо"),
+]
+
+
+def parse_season(title: str, product_type: str):
+    for text in (title, product_type):
+        if not text:
+            continue
+        for rx, season in SEASON_PATTERNS:
+            if rx.search(text):
+                return season
+    return None
 
 # Розмір в кінці назви: "... | XXL", "... L", "... M/Long", "... 43-45"
 SIZE_RE = re.compile(
@@ -102,16 +123,19 @@ def transform(source: str):
         mid, mt = ID_RE.search(raw), TITLE_RE.search(raw)
         if not mid or not mt:
             raise ValueError("Товар без g:id або g:title - фід пошкоджений")
-        parsed.append((raw, mid.group(1).strip(), unescape_xml(mt.group(1)).strip()))
+        mpt = PRODUCT_TYPE_RE.search(raw)
+        ptype = unescape_xml(mpt.group(1)).strip() if mpt else ""
+        parsed.append((raw, mid.group(1).strip(), unescape_xml(mt.group(1)).strip(), ptype))
 
     groups = {}
-    for raw, item_id, title in parsed:
+    for raw, item_id, title, _pt in parsed:
         groups.setdefault(group_key(item_id, title), []).append((item_id, title))
 
     out_parts, last_end = [], 0
     with_size = 0
+    with_season = 0
     pos = 0
-    for raw, item_id, title in parsed:
+    for raw, item_id, title, ptype in parsed:
         start = source.index(raw, pos)
         end = start + len(raw)
         pos = end
@@ -125,6 +149,10 @@ def transform(source: str):
         if size and not HAS_SIZE_RE.search(raw):
             inject += f"\n<g:size>{escape_xml(size)}</g:size>"
             with_size += 1
+        season = parse_season(title, ptype)
+        if season and not HAS_LABEL0_RE.search(raw):
+            inject += f"\n<g:custom_label_0>{season}</g:custom_label_0>"
+            with_season += 1
         idm = ID_RE.search(raw)
         out_parts.append(raw[: idm.end()] + inject + raw[idm.end():])
     out_parts.append(source[last_end:])
@@ -148,13 +176,14 @@ def transform(source: str):
         "groups_with_variants": sum(1 for g in groups.values() if len(g) > 1),
         "largest_group": max(len(g) for g in groups.values()),
         "items_with_size": with_size,
+        "items_with_season": with_season,
         "suspicious_groups": suspicious[:30],
         "suspicious_count": len(suspicious),
     }
     return result, stats
 
 
-INJECT_RE = re.compile(r"\n<g:(?:item_group_id|size)>[^<]*</g:(?:item_group_id|size)>")
+INJECT_RE = re.compile(r"\n<g:(?:item_group_id|size|custom_label_0)>[^<]*</g:(?:item_group_id|size|custom_label_0)>")
 
 
 def validate(source: str, result: str, stats: dict):
